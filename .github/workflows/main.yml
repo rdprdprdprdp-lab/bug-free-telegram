@@ -1,4 +1,4 @@
-name: Windows RDP V2
+name: Windows RDP V3
 
 on:
   workflow_dispatch:
@@ -25,18 +25,25 @@ jobs:
           Restart-Service -Name TermService -Force
           Write-Host "RDP Enabled OK"
 
-      - name: Download Bore
+      - name: Download and Extract Bore
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip -OutFile bore.zip
-          Expand-Archive bore.zip -Force
-          .\bore.exe --version
+          Expand-Archive -Path bore.zip -DestinationPath bore_extracted -Force
+          Write-Host "Files after extract:"
+          Get-ChildItem -Recurse bore_extracted
+          $boreExe = (Get-ChildItem -Recurse -Path bore_extracted -Filter bore.exe | Select-Object -First 1).FullName
+          Write-Host "Bore found at: $boreExe"
+          if (-not $boreExe) { Write-Host "::error::bore.exe not found after extract"; exit 1 }
+          & $boreExe --version
+          echo "BORE_EXE=$boreExe" >> $env:GITHUB_ENV
 
       - name: Start Bore Tunnel
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -RedirectStandardOutput "bore.log" -RedirectStandardError "bore-err.log" -NoNewWindow
+          Write-Host "Using bore at: $env:BORE_EXE"
+          Start-Process -FilePath $env:BORE_EXE -ArgumentList "local 3389 --to bore.pub" -RedirectStandardOutput "bore.log" -RedirectStandardError "bore-err.log" -NoNewWindow
           Start-Sleep -Seconds 20
           Get-Content bore.log -ErrorAction SilentlyContinue
           Get-Content bore-err.log -ErrorAction SilentlyContinue
