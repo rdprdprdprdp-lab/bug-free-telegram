@@ -1,0 +1,80 @@
+name: Windows RDP V2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable Remote Desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          $password = ConvertTo-SecureString "Admin@123" -AsPlainText -Force
+          New-LocalUser -Name "rdpuser" -Password $password -FullName "RDP User" -Description "RDP User"
+          Add-LocalGroupMember -Group "Administrators" -Member "rdpuser"
+          Enable-LocalUser -Name "rdpuser"
+          Restart-Service -Name TermService -Force
+          Write-Host "RDP Enabled OK"
+
+      - name: Download Bore
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip -OutFile bore.zip
+          Expand-Archive bore.zip -Force
+          .\bore.exe --version
+
+      - name: Start Bore Tunnel
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -RedirectStandardOutput "bore.log" -RedirectStandardError "bore-err.log" -NoNewWindow
+          Start-Sleep -Seconds 20
+          Get-Content bore.log -ErrorAction SilentlyContinue
+          Get-Content bore-err.log -ErrorAction SilentlyContinue
+          $log = (Get-Content bore.log -Raw -ErrorAction SilentlyContinue) + (Get-Content bore-err.log -Raw -ErrorAction SilentlyContinue)
+          $match = [regex]::Match($log, 'bore\.pub:\d+')
+          if (-not $match.Success) {
+            Write-Host "::error::No bore address found in log"
+            exit 1
+          }
+          $address = $match.Value
+          $hostPart = $address -replace ':.*',''
+          $portPart = $address -replace '.*:',''
+          Write-Host "=========================================="
+          Write-Host "        RDP CONNECTION INFO"
+          Write-Host "=========================================="
+          Write-Host "Host     : $hostPart"
+          Write-Host "Port     : $portPart"
+          Write-Host "Full     : $address"
+          Write-Host "Username : rdpuser"
+          Write-Host "Password : Admin@123"
+          Write-Host "=========================================="
+          @"
+          RDP INFO
+          Host: $hostPart
+          Port: $portPart
+          Full: $address
+          Username: rdpuser
+          Password: Admin@123
+          "@ | Out-File -FilePath rdp-info.txt
+          Write-Host "RDP is LIVE! Keeping alive..."
+          while ($true) {
+            Start-Sleep -Seconds 300
+            Write-Host "Still live: $address - $(Get-Date)"
+          }
+
+      - name: Upload RDP info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-info
+          path: rdp-info.txt
